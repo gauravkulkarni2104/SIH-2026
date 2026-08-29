@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000';
 
 async function get(path) {
   const res = await fetch(BASE + path);
@@ -37,3 +37,7 @@ export const api = {
 };
 
 export const API_BASE = BASE;
+
+export async function getSatelliteImageUrl(ulpin) {
+  return `${API_BASE}/api/ulpin/${encodeURIComponent(ulpin)}/satellite/image`;
+}

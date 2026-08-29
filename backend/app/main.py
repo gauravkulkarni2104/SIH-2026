@@ -11,6 +11,12 @@ from shapely.geometry import Polygon
 
 from . import data_loader, geometry, overlap, polygon_overlap
 from .elevation import get_open_meteo_elevation, validate_elevation
+from .satellite import (
+    check_satellite_service,
+    search_sentinel2,
+    get_sentinel2_image,
+)
+from fastapi.responses import Response
 
 load_dotenv()
 
@@ -203,6 +209,87 @@ def elevation_validation(ulpin: str):
         "open_meteo_elevation_m": external_elevation,
         **validation
     }
+@app.get("/api/ulpin/{ulpin}/satellite")
+async def satellite_validation(ulpin: str):
+    record = _get_record(ulpin)
+
+    latitude = record.get("latitude")
+    longitude = record.get("longitude")
+
+    if latitude is None or longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Latitude or longitude is unavailable for this ULPIN"
+        )
+
+    result = await check_satellite_service(
+        float(latitude),
+        float(longitude)
+    )
+
+    return {
+        "ulpin": ulpin,
+        **result
+    }
+@app.get("/api/ulpin/{ulpin}/satellite/search")
+async def satellite_search(
+    ulpin: str,
+    days_back: int = 30,
+    max_cloud_cover: float = 30.0,
+):
+    record = _get_record(ulpin)
+
+    latitude = record.get("latitude")
+    longitude = record.get("longitude")
+
+    if latitude is None or longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Latitude or longitude is unavailable for this ULPIN"
+        )
+
+    result = await search_sentinel2(
+        float(latitude),
+        float(longitude),
+        days_back=days_back,
+        max_cloud_cover=max_cloud_cover,
+    )
+
+    return {
+        "ulpin": ulpin,
+        **result
+    }
+@app.get("/api/ulpin/{ulpin}/satellite/image")
+async def satellite_image(ulpin: str):
+    record = _get_record(ulpin)
+
+    latitude = record.get("latitude")
+    longitude = record.get("longitude")
+
+    if latitude is None or longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Latitude or longitude is unavailable for this ULPIN"
+        )
+
+    result = await get_sentinel2_image(
+        float(latitude),
+        float(longitude),
+    )
+
+    if result.get("status") != "AVAILABLE":
+        raise HTTPException(
+            status_code=503,
+            detail=result.get(
+                "reason",
+                "Satellite imagery unavailable"
+            ),
+        )
+
+    return Response(
+        content=result["image_bytes"],
+        media_type="image/png",
+    )
 @app.get("/api/ulpin/{ulpin}/geometry")
 def get_geometry(ulpin: str, refresh: bool = False):
     """

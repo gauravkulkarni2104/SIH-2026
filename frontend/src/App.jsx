@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, lazy, Suspense } from 'react';
-import { api } from './api';
+import { api, getSatelliteImageUrl } from './api';
 import MapView from './components/MapView';
 import FloorControls from './components/FloorControls';
 import PropertyPanel from './components/PropertyPanel';
@@ -8,6 +8,7 @@ import DataSourcePanel from './components/DataSourcePanel';
 import CompareOverlap from './components/CompareOverlap';
 import ProviderStatusPanel from './components/ProviderStatusPanel';
 import ProvenanceBadge from './components/ProvenanceBadge';
+import SatelliteMap from "./components/SatelliteMap";
 
 // Three.js is pulled into its own chunk and only fetched when the 3D viewer is actually opened.
 const ThreeViewer = lazy(() => import('./components/ThreeViewer'));
@@ -27,6 +28,7 @@ export default function App() {
   const [geometry, setGeometry] = useState(null);
   const [geometryLoading, setGeometryLoading] = useState(false);
   const [threeD, setThreeD] = useState(null);
+  const [showSatellite, setShowSatellite] = useState(false);
   const [visibleFloorIndex, setVisibleFloorIndex] = useState(null);
   const [tab, setTab] = useState('detail');
 
@@ -256,6 +258,34 @@ export default function App() {
                 <div className="section-title-row">
                   <div className="label" style={{ marginBottom: 0 }}>3D Digital Twin</div>
                   <button className="btn ghost" onClick={load3D}>{threeD ? 'Refresh' : 'Build 3D view'}</button>
+                  <button
+                         className="btn ghost"
+                         onClick={() => setShowSatellite(!showSatellite)}
+                         disabled={!selected}
+                      >
+                       {showSatellite ? 'Hide Satellite' : 'Satellite View'}
+                    </button>
+                    {showSatellite && selected && (
+                        <div className="satellite-panel">
+                        <div className="section-title">
+                          Sentinel-2 Satellite Imagery
+                          </div>
+
+                           <div className="satellite-meta">
+                             <span>ULPIN: {selected}</span>
+                             <span>Source: ArcGIS World Imagery</span>
+                          </div>
+
+                          <SatelliteMap
+    latitude={record?.latitude}
+    longitude={record?.longitude}
+/>
+                       <div className="geo-msg">
+                           Satellite imagery is supplementary visual context and
+                           does not represent an official cadastral boundary.
+                         </div>
+                       </div>
+                   )}
                 </div>
                 {threeD ? (
                   <>
