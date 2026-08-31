@@ -372,7 +372,7 @@ def get_3d(ulpin: str):
         footprint_source = "OpenStreetMap"
         is_estimated = False
         provenance.update({
-            "label": "VERIFIED BUILDING FOOTPRINT",
+            "label": "OPEN-DATA MATCHED FOOTPRINT",
             "source": "OpenStreetMap",
             "confidence": geo["confidence"],
             "distanceM": geo["candidate"]["distanceM"],
@@ -415,7 +415,7 @@ def get_3d(ulpin: str):
         "heightSource": rec["height_source"],
         "floors": floors,
         "provenance": provenance,
-        "label": "3D VOLUMETRIC REPRESENTATION" if is_estimated else "3D MODEL (verified OSM footprint)",
+        "label": "3D VOLUMETRIC REPRESENTATION" if is_estimated else "3D MODEL (matched OSM footprint)",
     }
 
 
