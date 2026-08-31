@@ -1,62 +1,98 @@
-function QualityRow({ ok, label }) {
+export default function PropertyPanel({ record, geometry, onEnter3D }) {
+  if (!record) return null;
+
+  const q = record.dataQuality || {};
+
+  const qualityItems = [
+    { key: 'ulpinMatched',          label: 'ULPIN matched'         },
+    { key: 'coordinatesValid',      label: 'Coordinates valid'     },
+    { key: 'propertyTypeAvailable', label: 'Property type present' },
+    { key: 'floorDataAvailable',    label: 'Floor data present'    },
+    { key: 'demAvailable',          label: 'DEM elevation'         },
+    { key: 'dsmAvailable',          label: 'DSM elevation'         },
+    { key: 'heightValidated',       label: 'Height validated'      },
+  ];
+
   return (
-    <div className="item">
-      <span className={ok ? 'yes' : 'no'}>{ok ? '✓' : '⚠'}</span>
-      <span>{label}</span>
-    </div>
-  );
-}
-
-export default function PropertyPanel({ record, geometry }) {
-  const q = record.dataQuality;
-  return (
-    <>
-      <div className="section-title-row">
-        <div className="label" style={{ marginBottom: 0 }}>Parcel Detail</div>
-        <span className={`status-badge ${record.height_consistent === false ? 'warn' : 'ok'}`}>
-          {record.height_consistent === false ? '⚠ HEIGHT DATA MISMATCH' : '✓ HEIGHT CONSISTENT'}
-        </span>
-      </div>
-      <div className="parcel-id" style={{ fontSize: 16, marginTop: 6 }}>{record.ulpin}</div>
-      <div className="parcel-type">{record.type}</div>
-
-      <div className="detail-grid">
-        <div className="stat"><div className="k">Area</div><div className="v">{record.area_m2.toFixed(2)} m²</div></div>
-        <div className="stat"><div className="k">Perimeter</div><div className="v">{record.perimeter_m.toFixed(2)} m</div></div>
-        <div className="stat"><div className="k">Floors</div><div className="v">{record.floors}</div></div>
-        <div className="stat"><div className="k">Floor height</div><div className="v">{record.floor_height_m.toFixed(1)} m</div></div>
-        <div className="stat"><div className="k">Building height (reg.)</div><div className="v">{(record.registered_height_m ?? record.building_height_m).toFixed(1)} m</div></div>
-        <div className="stat"><div className="k">Calculated (DSM–DEM)</div><div className="v">{record.calculated_height_m != null ? record.calculated_height_m.toFixed(1) + ' m' : '—'}</div></div>
-        <div className="stat"><div className="k">DEM (ground)</div><div className="v">{record.dem_m_asl.toFixed(2)} m ASL</div></div>
-        <div className="stat"><div className="k">DSM (surface)</div><div className="v">{record.dsm_m_asl != null ? record.dsm_m_asl.toFixed(2) + ' m ASL' : '—'}</div></div>
-        <div className="stat"><div className="k">Latitude</div><div className="v">{record.latitude.toFixed(6)}</div></div>
-        <div className="stat"><div className="k">Longitude</div><div className="v">{record.longitude.toFixed(6)}</div></div>
+    <div className="property-hero">
+      {/* ULPIN badge + type tag row */}
+      <div className="prop-header">
+        <div>
+          <div className="prop-ulpin-label">ULPIN</div>
+          <div className="prop-ulpin-id">{record.ulpin}</div>
+        </div>
+        <div className="prop-type-tag">{record.type || '—'}</div>
       </div>
 
-      <div className="label" style={{ marginTop: 16 }}>Data Quality</div>
-      <div className="quality-list">
-        <QualityRow ok={q.ulpinMatched} label="ULPIN matched" />
-        <QualityRow ok={q.coordinatesValid} label="Coordinates valid" />
-        <QualityRow ok={q.propertyTypeAvailable} label="Property type available" />
-        <QualityRow ok={q.floorDataAvailable} label="Floor data available" />
-        <QualityRow ok={q.demAvailable} label="DEM available" />
-        <QualityRow ok={q.dsmAvailable} label="DSM available" />
-        <QualityRow ok={q.heightValidated} label="Height validated" />
-        <QualityRow
-          ok={geometry?.status === 'MATCHED'}
-          label={geometry?.status === 'MATCHED' ? 'Open geometry matched' : 'Exact geometry unavailable'}
-        />
-      </div>
-
-      <div className="label" style={{ marginTop: 16 }}>Data Sources</div>
-      <div className="source-tags">
-        <div className="source-tag">PROPERTY DATA — <b>CSV</b></div>
-        <div className="source-tag">HEIGHT — <b>DSM / DEM CSV</b></div>
-        <div className="source-tag">CLASSIFICATION — <b>CSV</b></div>
-        <div className="source-tag">
-          GEOMETRY — <b>{geometry ? (geometry.source || 'unavailable') : 'not searched yet'}</b>
+      {/* Stats grid */}
+      <div className="prop-stats">
+        <div className="prop-stat">
+          <div className="ps-k">Area</div>
+          <div className="ps-v">{record.area_m2.toFixed(1)} <span className="ps-unit">m²</span></div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">Floors</div>
+          <div className="ps-v">{record.floors}</div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">Height</div>
+          <div className="ps-v">{record.building_height_m.toFixed(1)} <span className="ps-unit">m</span></div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">Floor H.</div>
+          <div className="ps-v">
+            {record.floor_height_m.toFixed(1)} <span className="ps-unit">m</span>
+            {record.floor_height_estimated && <span className="ps-est"> est.</span>}
+          </div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">DEM</div>
+          <div className="ps-v">{record.dem_m_asl.toFixed(2)} <span className="ps-unit">m asl</span></div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">DSM</div>
+          <div className="ps-v">{record.dsm_m_asl != null ? record.dsm_m_asl.toFixed(2) : '—'} <span className="ps-unit">m asl</span></div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">Lat</div>
+          <div className="ps-v" style={{ fontSize: 13 }}>{record.latitude.toFixed(6)}</div>
+        </div>
+        <div className="prop-stat">
+          <div className="ps-k">Lon</div>
+          <div className="ps-v" style={{ fontSize: 13 }}>{record.longitude.toFixed(6)}</div>
         </div>
       </div>
-    </>
+
+      {/* Height consistency indicator */}
+      {record.height_consistent != null && (
+        <div className={`height-badge ${record.height_consistent ? 'ok' : 'warn'}`}>
+          {record.height_consistent
+            ? `✓ Height consistent — ${record.height_source}`
+            : `⚠ Height mismatch — registered ${record.registered_height_m?.toFixed(1) ?? '?'} m vs calculated ${record.calculated_height_m?.toFixed(1) ?? '?'} m`}
+        </div>
+      )}
+
+      {/* Data quality checklist */}
+      <div className="prop-quality">
+        <div className="pq-title">Data Quality</div>
+        <div className="quality-list">
+          {qualityItems.map(({ key, label }) => (
+            <div key={key} className="item">
+              <span className={q[key] ? 'yes' : 'no'}>{q[key] ? '✓' : '✕'}</span>
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 3D CTA */}
+      {onEnter3D && (
+        <button className="prop-3d-cta" onClick={onEnter3D}>
+          <span className="cta-icon">⬡</span>
+          Enter 3D Geometry
+          <span className="cta-arrow">→</span>
+        </button>
+      )}
+    </div>
   );
 }

@@ -16,16 +16,14 @@ export default function SatelliteMap({ latitude, longitude }) {
       return;
     }
 
-    if (!API_KEY) {
-      console.error("VITE_ARCGIS_API_KEY is missing");
-      return;
+    if (API_KEY) {
+      esriConfig.apiKey = API_KEY;
+    } else {
+      console.warn("VITE_ARCGIS_API_KEY is missing, map may not load correctly or show a watermark.");
     }
 
-    // Configure ArcGIS authentication before creating the map.
-    esriConfig.apiKey = API_KEY;
-
     const map = new Map({
-      basemap: "arcgis/imagery/standard",
+      basemap: "satellite",
     });
 
     const view = new MapView({
@@ -73,7 +71,7 @@ export default function SatelliteMap({ latitude, longitude }) {
       ref={mapDiv}
       style={{
         width: "100%",
-        height: "500px",
+        height: "100%",
         borderRadius: "12px",
         overflow: "hidden",
       }}
