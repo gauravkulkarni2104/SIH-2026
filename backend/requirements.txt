@@ -1,8 +1,8 @@
-fastapi
-uvicorn[standard]
-pandas
-shapely
-pyproj
-httpx
-python-dotenv
-requests
+fastapi==0.128.8
+uvicorn[standard]==0.39.0
+pandas==2.2.2
+shapely==2.0.7
+pyproj==3.6.1
+httpx==0.28.1
+python-dotenv==1.2.1
+requests==2.32.5

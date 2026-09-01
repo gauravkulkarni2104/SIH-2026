@@ -1,4 +1,14 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const isDev = import.meta.env.DEV;
+
+let rawBase = import.meta.env.VITE_API_BASE_URL || (isDev ? 'http://127.0.0.1:8000' : '');
+
+if (!rawBase) {
+  throw new Error(
+    'VITE_API_BASE_URL is not configured. Add the public HTTPS backend URL in Vercel Environment Variables.'
+  );
+}
+
+const API_BASE_URL = rawBase.replace(/\/+$/, '');
 
 const _CLIENT_CACHE = new Map();
 
