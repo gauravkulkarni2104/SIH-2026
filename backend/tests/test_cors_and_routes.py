@@ -10,10 +10,10 @@ client = TestClient(app)
 def test_cors_vercel_production_origin():
     response = client.get(
         "/api/health",
-        headers={"Origin": "https://sih-2026-1kjn.vercel.app"}
+        headers={"Origin": "https://sih-2026-g6vh.vercel.app"}
     )
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-1kjn.vercel.app"
+    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-g6vh.vercel.app"
     assert response.headers.get("access-control-allow-credentials") == "true"
     data = response.json()
     assert data.get("status") == "ok"
@@ -53,13 +53,13 @@ def test_cors_options_preflight_post_request():
     response = client.options(
         "/api/overlap/2d",
         headers={
-            "Origin": "https://sih-2026-1kjn.vercel.app",
+            "Origin": "https://sih-2026-g6vh.vercel.app",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "content-type",
         }
     )
     assert response.status_code == 200
-    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-1kjn.vercel.app"
+    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-g6vh.vercel.app"
     assert "POST" in response.headers.get("access-control-allow-methods", "")
     assert "content-type" in response.headers.get("access-control-allow-headers", "").lower()
 
@@ -77,10 +77,10 @@ def test_post_overlap_2d_with_cors():
     response = client.post(
         "/api/overlap/2d",
         json=payload,
-        headers={"Origin": "https://sih-2026-1kjn.vercel.app"}
+        headers={"Origin": "https://sih-2026-g6vh.vercel.app"}
     )
     # Check that CORS header is present even on 404 or 200
-    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-1kjn.vercel.app"
+    assert response.headers.get("access-control-allow-origin") == "https://sih-2026-g6vh.vercel.app"
 
 
 if __name__ == "__main__":

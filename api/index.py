@@ -26,7 +26,7 @@ app = FastAPI(title="ULPIN Digital Twin API", version="1.0.0")
 
 # Allowed origins for CORS (Vercel deployment, localhost ports, and local dev)
 origins = [
-    "https://sih-2026-1kjn.vercel.app",
+    "https://sih-2026-g6vh.vercel.app",
     "https://sih-2026-chi-eight.vercel.app",
     "http://localhost:3000",
     "http://localhost:5173",
