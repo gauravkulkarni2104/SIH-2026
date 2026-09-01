@@ -32,6 +32,8 @@ import httpx
 from shapely.geometry import Polygon, Point
 import requests
 import xml.etree.ElementTree as ET
+from . import cache
+
 logger = logging.getLogger("ulpin.geometry")
 if not logger.handlers:
     handler = logging.StreamHandler()
@@ -132,8 +134,11 @@ def _save_cache(cache: dict):
 
 
 def _cache_get(ulpin: str) -> Optional[dict]:
-    cache = _load_cache()
-    entry = cache.get(ulpin)
+    res = cache.cache_get(f"geometry:{ulpin}")
+    if res:
+        return res
+    local_cache = _load_cache()
+    entry = local_cache.get(ulpin)
     if not entry:
         return None
     age = time.time() - entry.get("_cachedAt", 0)
@@ -147,12 +152,14 @@ def _cache_get(ulpin: str) -> Optional[dict]:
 
 def _cache_put(ulpin: str, result: dict):
     # UNAVAILABLE (provider failure) is intentionally never cached.
-    if result["status"] == "UNAVAILABLE":
+    if result.get("status") == "UNAVAILABLE":
         return
-    kind = "positive" if result["status"] in ("MATCHED", "UNVERIFIED") else "negative"
-    cache = _load_cache()
-    cache[ulpin] = {"_cachedAt": time.time(), "_kind": kind, "result": result}
-    _save_cache(cache)
+    ttl = 86400 if result.get("status") in ("MATCHED", "UNVERIFIED") else 300
+    cache.cache_set(f"geometry:{ulpin}", result, ttl_seconds=ttl)
+    kind = "positive" if result.get("status") in ("MATCHED", "UNVERIFIED") else "negative"
+    local_cache = _load_cache()
+    local_cache[ulpin] = {"_cachedAt": time.time(), "_kind": kind, "result": result}
+    _save_cache(local_cache)
 
 
 # ---------------------------------------------------------------- geometry math

@@ -1,17 +1,23 @@
 """
 Loads the three source CSVs, normalizes column names, joins on ULPIN,
-and runs basic data-quality validation. No column names are hard-coded
-as exact matches — we match by normalized aliasing so the loader tolerates
-reasonable naming variation across CSV exports.
+runs basic data-quality validation, and builds a spatial index for 0ms nearby parcel searches.
+
+Cached once at process startup for zero-latency serverless request handling.
 """
 from __future__ import annotations
 import os
 import re
+import math
+import time
+import logging
 import pandas as pd
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Tuple
+
+logger = logging.getLogger("ulpin.dataloader")
 
 DATA_DIR = os.environ.get("ULPIN_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "..", "data"))
+EARTH_RADIUS = 6371000.0
 
 # canonical_field -> list of acceptable normalized aliases (lowercase, no separators)
 ALIASES = {
@@ -63,7 +69,29 @@ def _valid_coord(lat, lon) -> bool:
     return -90 <= lat <= 90 and -180 <= lon <= 180 and not (lat == 0 and lon == 0)
 
 
-def load_dataset():
+def _latlon_to_cartesian(lat: float, lon: float) -> Tuple[float, float, float]:
+    """Converts spherical lat/lon in degrees to 3D Cartesian coordinates [x,y,z] on Earth sphere."""
+    phi = math.radians(lat)
+    lam = math.radians(lon)
+    x = EARTH_RADIUS * math.cos(phi) * math.cos(lam)
+    y = EARTH_RADIUS * math.cos(phi) * math.sin(lam)
+    z = EARTH_RADIUS * math.sin(phi)
+    return x, y, z
+
+
+# Global process singleton cache
+_CACHED_UNIFIED: Optional[pd.DataFrame] = None
+_CACHED_REPORT: Optional[LoadReport] = None
+_SPATIAL_INDEX = None
+_RECORD_LOOKUP_CACHE: dict[str, dict] = {}
+
+
+def load_dataset() -> Tuple[pd.DataFrame, LoadReport]:
+    global _CACHED_UNIFIED, _CACHED_REPORT, _SPATIAL_INDEX
+    if _CACHED_UNIFIED is not None and _CACHED_REPORT is not None:
+        return _CACHED_UNIFIED, _CACHED_REPORT
+
+    start_t = time.perf_counter()
     report = LoadReport()
     frames = {}
 
@@ -120,4 +148,42 @@ def load_dataset():
         if not _valid_coord(row.get("latitude"), row.get("longitude")):
             report.invalid_coordinates.append(str(row.get("ulpin")))
 
-    return unified, report
+    _CACHED_UNIFIED = unified
+    _CACHED_REPORT = report
+
+    # Build spatial index using scipy KDTree if available
+    try:
+        from scipy.spatial import KDTree
+        cart_coords = []
+        for _, r in unified.iterrows():
+            lat, lon = r.get("latitude"), r.get("longitude")
+            if _valid_coord(lat, lon):
+                cart_coords.append(_latlon_to_cartesian(float(lat), float(lon)))
+            else:
+                cart_coords.append((0.0, 0.0, 0.0))
+        _SPATIAL_INDEX = KDTree(cart_coords)
+        logger.info("Built scipy KDTree spatial index for %d parcels", len(cart_coords))
+    except Exception as exc:
+        logger.info("scipy KDTree unavailable, using distance sorting fallback: %s", exc)
+
+    elapsed_ms = round((time.perf_counter() - start_t) * 1000, 2)
+    logger.info("[PERF] Dataset loaded and indexed in %s ms (%d rows)", elapsed_ms, len(unified))
+    return _CACHED_UNIFIED, _CACHED_REPORT
+
+
+def query_spatial_index(target_lat: float, target_lon: float, k: int = 15) -> List[int]:
+    """
+    Returns indices of the k nearest parcels to (target_lat, target_lon) using spatial KDTree.
+    """
+    unified, _ = load_dataset()
+    global _SPATIAL_INDEX
+    if _SPATIAL_INDEX is not None:
+        target_cart = _latlon_to_cartesian(target_lat, target_lon)
+        # Query nearest k+1 points
+        dists, indices = _SPATIAL_INDEX.query(target_cart, k=min(k, len(unified)))
+        if isinstance(indices, int):
+            return [indices]
+        return list(indices)
+
+    # Fallback to returning all indices if KDTree is unavailable
+    return list(range(len(unified)))

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Map from "@arcgis/core/Map";
 import MapView from "@arcgis/core/views/MapView";
 import esriConfig from "@arcgis/core/config";
@@ -9,43 +9,26 @@ const API_KEY = import.meta.env.VITE_ARCGIS_API_KEY || import.meta.env.VITE_MAPB
 
 export default function SatelliteMap({ latitude, longitude, footprint = null }) {
   const mapDiv = useRef(null);
+  const viewRef = useRef(null);
+  const isInitializingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  useEffect(() => {
-    if (!mapDiv.current || latitude == null || longitude == null) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg(null);
-
-    if (API_KEY) {
-      esriConfig.apiKey = API_KEY;
-    } else {
-      console.warn("Satellite API Key (VITE_ARCGIS_API_KEY) is missing.");
-    }
-
-    let view = null;
+  // Helper to update markers and building footprint graphics on existing MapView
+  const updateGraphicsAndCenter = useCallback((view, lat, lon, foot) => {
+    if (!view || lat == null || lon == null) return;
 
     try {
-      const map = new Map({
-        basemap: "satellite",
-      });
+      // Clear previous graphics
+      view.graphics.removeAll();
 
-      view = new MapView({
-        container: mapDiv.current,
-        map,
-        center: [Number(longitude), Number(latitude)],
-        zoom: 19,
-      });
-
-      // ULPIN center marker graphic
+      // 1. ULPIN center marker graphic
       const point = {
         type: "point",
-        longitude: Number(longitude),
-        latitude: Number(latitude),
+        longitude: Number(lon),
+        latitude: Number(lat),
       };
 
       const marker = new Graphic({
@@ -53,7 +36,7 @@ export default function SatelliteMap({ latitude, longitude, footprint = null }) 
         symbol: {
           type: "simple-marker",
           style: "circle",
-          color: [239, 68, 68, 0.9], // Red dot
+          color: [239, 68, 68, 0.9], // Red location marker
           size: 14,
           outline: {
             color: [255, 255, 255, 1],
@@ -61,12 +44,11 @@ export default function SatelliteMap({ latitude, longitude, footprint = null }) 
           },
         },
       });
-
       view.graphics.add(marker);
 
-      // Draw real footprint overlay if footprint geometry is available
-      if (Array.isArray(footprint) && footprint.length >= 3) {
-        const rings = footprint.map(([lon, lat]) => [Number(lon), Number(lat)]);
+      // 2. Footprint polygon overlay graphic
+      if (Array.isArray(foot) && foot.length >= 3) {
+        const rings = foot.map(([pLon, pLat]) => [Number(pLon), Number(pLat)]);
         const polygonGeometry = {
           type: "polygon",
           rings: [rings],
@@ -78,37 +60,122 @@ export default function SatelliteMap({ latitude, longitude, footprint = null }) 
             type: "simple-fill",
             color: [59, 130, 246, 0.25], // Semi-transparent blue fill
             outline: {
-              color: [59, 130, 246, 1], // Solid blue outline
+              color: [59, 130, 246, 1], // Solid blue border
               width: 2.5,
             },
           },
         });
-
         view.graphics.add(polygonGraphic);
       }
 
+      // Smoothly re-center camera view to new location
+      view.goTo(
+        {
+          center: [Number(lon), Number(lat)],
+          zoom: 19,
+        },
+        { animate: true, duration: 600 }
+      ).catch((err) => {
+        // Ignore navigation aborts during rapid switching
+        if (err?.name !== "AbortError") {
+          console.warn("Map view.goTo navigation interrupted:", err);
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to update graphics on MapView:", err);
+    }
+  }, []);
+
+  // 1. Single Mount Effect: Create ArcGIS MapView only ONCE when container is ready
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    if (!mapDiv.current || latitude == null || longitude == null) {
+      setLoading(false);
+      return;
+    }
+
+    if (viewRef.current || isInitializingRef.current) {
+      return;
+    }
+
+    isInitializingRef.current = true;
+    setLoading(true);
+    setErrorMsg(null);
+
+    if (API_KEY) {
+      esriConfig.apiKey = API_KEY;
+    } else {
+      console.warn("Satellite API Key (VITE_ARCGIS_API_KEY) is missing.");
+    }
+
+    let map = null;
+    let view = null;
+
+    try {
+      map = new Map({
+        basemap: "satellite",
+      });
+
+      view = new MapView({
+        container: mapDiv.current,
+        map,
+        center: [Number(longitude), Number(latitude)],
+        zoom: 19,
+      });
+
+      viewRef.current = view;
+
+      // Handle async view loading & errors safely
       view.when(
         () => {
+          if (!isMountedRef.current) return;
           setLoading(false);
+          isInitializingRef.current = false;
+          // Initial graphics update
+          updateGraphicsAndCenter(view, latitude, longitude, footprint);
         },
         (error) => {
-          console.error("ArcGIS MapView failed:", error);
+          isInitializingRef.current = false;
+          // Silently ignore intentional cleanup aborts (e.g. React.StrictMode unmount)
+          if (!isMountedRef.current || error?.name === "AbortError" || error?.message?.includes("Aborted")) {
+            return;
+          }
+          console.error("ArcGIS MapView failed to load:", error);
           setErrorMsg(error?.message || "Failed to load satellite imagery");
           setLoading(false);
         }
       );
     } catch (err) {
-      console.error("ArcGIS Map initialization error:", err);
-      setErrorMsg(err.message || "Failed to initialize satellite map");
-      setLoading(false);
+      isInitializingRef.current = false;
+      if (isMountedRef.current) {
+        console.error("ArcGIS Map initialization error:", err);
+        setErrorMsg(err.message || "Failed to initialize satellite map");
+        setLoading(false);
+      }
     }
 
+    // Cleanup: Destroy MapView safely on component unmount
     return () => {
-      if (view) {
-        view.destroy();
+      isMountedRef.current = false;
+      isInitializingRef.current = false;
+      if (viewRef.current) {
+        try {
+          viewRef.current.destroy();
+        } catch (e) {
+          // ignore cleanup errors
+        }
+        viewRef.current = null;
       }
     };
-  }, [latitude, longitude, footprint]);
+  }, []); // Run ONCE on mount
+
+  // 2. Update Effect: Re-center & update graphics without destroying MapView when ULPIN changes
+  useEffect(() => {
+    if (viewRef.current && latitude != null && longitude != null) {
+      updateGraphicsAndCenter(viewRef.current, latitude, longitude, footprint);
+    }
+  }, [latitude, longitude, footprint, updateGraphicsAndCenter]);
 
   if (latitude == null || longitude == null) {
     return (

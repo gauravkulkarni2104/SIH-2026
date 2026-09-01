@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from shapely.geometry import Polygon
 
-from . import data_loader, geometry, overlap, polygon_overlap
+import time
+from . import data_loader, geometry, overlap, polygon_overlap, cache
 from .elevation import get_open_meteo_elevation, validate_elevation
 from .satellite import (
     check_satellite_service,
@@ -22,9 +23,19 @@ load_dotenv()
 
 app = FastAPI(title="ULPIN Digital Twin API", version="1.0.0")
 
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://sih-2026-chi-eight.vercel.app"
+]
+
+env_origins = os.environ.get("ALLOWED_ORIGINS")
+if env_origins:
+    origins.extend([origin.strip() for origin in env_origins.split(",")])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -60,12 +71,6 @@ def _record(row) -> dict:
     if calculated_h is not None and registered_h:
         height_consistent = abs(calculated_h - registered_h) <= 0.5
 
-    # Height used for elevation/geometry math. Priority per spec:
-    #   1. DSM - DEM (directly measured surface delta)
-    #   2. registered building height (CSV)
-    #   3. floors x floor_height (weakest — a geometric estimate)
-    # Source CSV values (registered_h, calculated_h) are never overwritten —
-    # this is only which one downstream code uses for elevations.
     if calculated_h is not None and calculated_h > 0:
         used_height, height_source = calculated_h, "calculated (DSM-DEM)"
     elif registered_h:
@@ -105,10 +110,15 @@ def _record(row) -> dict:
 
 
 def _get_record(ulpin: str) -> dict:
+    cached = cache.cache_get(f"ulpin:{ulpin}")
+    if cached:
+        return cached
     match = _DATASET[_DATASET["ulpin"] == ulpin]
     if match.empty:
         raise HTTPException(status_code=404, detail=f"ULPIN '{ulpin}' not found in dataset")
-    return _record(match.iloc[0])
+    rec = _record(match.iloc[0])
+    cache.cache_set(f"ulpin:{ulpin}", rec, ttl_seconds=86400)
+    return rec
 
 
 def _all_records() -> list[dict]:
@@ -312,22 +322,52 @@ def providers_status():
 
 @app.get("/api/ulpin/{ulpin}/nearby")
 def get_nearby(ulpin: str, limit: int = 10):
+    t0 = time.perf_counter()
+    cache_key = f"nearby:{ulpin}"
+    cached = cache.cache_get(cache_key)
+    if cached:
+        return cached
+
     rec = _get_record(ulpin)
+    target_lat, target_lon = rec["latitude"], rec["longitude"]
+
+    # Use spatial KDTree index to query candidate indices in 0ms
+    candidate_indices = data_loader.query_spatial_index(target_lat, target_lon, k=min(limit * 3 + 5, len(_DATASET)))
+
     others = []
-    for other in _all_records():
-        if other["ulpin"] == rec["ulpin"]:
+    seen = set()
+    for idx in candidate_indices:
+        row = _DATASET.iloc[idx]
+        other_ulpin = str(row.get("ulpin"))
+        if other_ulpin == rec["ulpin"] or other_ulpin in seen:
             continue
-        d = _haversine(rec["latitude"], rec["longitude"], other["latitude"], other["longitude"])
+        seen.add(other_ulpin)
+        other_lat, other_lon = _f(row.get("latitude")), _f(row.get("longitude"))
+        d = _haversine(target_lat, target_lon, other_lat, other_lon)
         others.append({
-            "ulpin": other["ulpin"], "distanceM": round(d, 2), "type": other["type"],
-            "latitude": other["latitude"], "longitude": other["longitude"],
+            "ulpin": other_ulpin,
+            "distanceM": round(d, 2),
+            "type": str(row.get("type")),
+            "latitude": other_lat,
+            "longitude": other_lon,
         })
+
     others.sort(key=lambda o: o["distanceM"])
-    return {"ulpin": ulpin, "count": len(others), "results": others[:limit]}
+    result = {"ulpin": ulpin, "count": len(others), "results": others[:limit]}
+    cache.cache_set(cache_key, result, ttl_seconds=86400)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+    logging.getLogger("ulpin.main").info("[PERF] Nearby search for %s completed in %s ms", ulpin, elapsed_ms)
+    return result
 
 
 @app.get("/api/ulpin/{ulpin}/3d")
 def get_3d(ulpin: str):
+    t0 = time.perf_counter()
+    cache_key = f"3d:{ulpin}"
+    cached = cache.cache_get(cache_key)
+    if cached:
+        return cached
+
     rec = _get_record(ulpin)
     geo = geometry.match_geometry(rec["ulpin"], rec["latitude"], rec["longitude"], rec["area_m2"])
 
@@ -335,8 +375,7 @@ def get_3d(ulpin: str):
     floors = overlap.floor_intervals(rec["dem_m_asl"], rec["floors"], rec["floor_height_m"])
     for f in floors:
         f["isEstimated"] = rec["floor_height_estimated"]
-    # Synthetic roof cap for visual completeness only — not a registered floor from the CSV,
-    # always labeled estimated, always the same footprint (never a different shape).
+
     floors.append({
         "index": len(floors), "label": "ROOF",
         "bottomM": top_elevation, "topM": round(top_elevation + 0.3, 2),
@@ -346,18 +385,13 @@ def get_3d(ulpin: str):
     provenance = {"cadastralBoundary": "NOT AVAILABLE"}
 
     if geo["status"] == "MATCHED":
-        # Real matched OSM footprint. Validate + repair before it goes anywhere near
-        # the extruder: fix self-intersections (buffer(0)) and make sure the ring is closed.
-        raw_ring = geo["candidate"]["ring"]  # [[lon,lat], ...]
+        raw_ring = geo["candidate"]["ring"]
         local_pts = geometry._local_meters_ring(raw_ring, rec["latitude"])
         try:
             poly = Polygon(local_pts)
             geometry_valid = poly.is_valid
             if not poly.is_valid:
                 poly = poly.buffer(0)
-            # convert the (possibly repaired) polygon's exterior back to lon/lat using the
-            # same equirectangular approximation used to build it (see geometry._local_meters_ring:
-            # x = R*cos(lat0)*radians(lon), y = R*radians(lat) — inverted here)
             exterior = list(poly.exterior.coords)
             R = 6371000.0
             lat0 = rec["latitude"]
@@ -381,8 +415,6 @@ def get_3d(ulpin: str):
             "geometryValid": geometry_valid,
         })
     else:
-        # UNVERIFIED / NO_CANDIDATES / UNAVAILABLE all fall back the same way — a regular
-        # polygon sized to the CSV area, centred on the ULPIN point. Never called exact.
         side = math.sqrt(rec["area_m2"])
         r = side / math.sqrt(2)
         footprint = []
@@ -400,7 +432,7 @@ def get_3d(ulpin: str):
             "geometryStatus": geo["status"],
         })
 
-    return {
+    result = {
         "ulpin": ulpin,
         "originLatitude": rec["latitude"],
         "originLongitude": rec["longitude"],
@@ -418,15 +450,31 @@ def get_3d(ulpin: str):
         "label": "3D VOLUMETRIC REPRESENTATION" if is_estimated else "3D MODEL (matched OSM footprint)",
     }
 
+    cache.cache_set(cache_key, result, ttl_seconds=86400)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+    logging.getLogger("ulpin.main").info("[PERF] 3D payload for %s generated in %s ms", ulpin, elapsed_ms)
+    return result
+
 
 @app.get("/api/ulpin/{ulpin}/overlap")
 def get_overlap(ulpin: str, with_: str = Query(..., alias="with")):
+    t0 = time.perf_counter()
+    sorted_a, sorted_b = sorted([ulpin, with_])
+    cache_key = f"overlap:{sorted_a}:{sorted_b}"
+    cached = cache.cache_get(cache_key)
+    if cached:
+        return cached
+
     recA = _get_record(ulpin)
     recB = _get_record(with_)
     geoA = geometry.match_geometry(recA["ulpin"], recA["latitude"], recA["longitude"], recA["area_m2"])
     geoB = geometry.match_geometry(recB["ulpin"], recB["latitude"], recB["longitude"], recB["area_m2"])
     report = overlap.full_overlap_report(geoA, geoB, recA, recB, recA["latitude"], recA["longitude"])
-    return {"ulpinA": ulpin, "ulpinB": with_, **report}
+    result = {"ulpinA": ulpin, "ulpinB": with_, **report}
+    cache.cache_set(cache_key, result, ttl_seconds=86400)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+    logging.getLogger("ulpin.main").info("[PERF] 3D Overlap %s vs %s completed in %s ms", ulpin, with_, elapsed_ms)
+    return result
 
 
 class Overlap2DRequest(BaseModel):
@@ -436,23 +484,24 @@ class Overlap2DRequest(BaseModel):
 
 @app.post("/api/overlap/2d")
 def analyze_overlap_2d(payload: Overlap2DRequest):
-    """
-    Stage 6 — real 2D Shapely polygon intersection between two parcels'
-    matched OSM footprints, computed in a local projected (UTM) CRS.
+    t0 = time.perf_counter()
+    sorted_a, sorted_b = sorted([payload.parcel_a_ulpin, payload.parcel_b_ulpin])
+    cache_key = f"overlap2d:{sorted_a}:{sorted_b}"
+    cached = cache.cache_get(cache_key)
+    if cached:
+        return cached
 
-    Purely additive: does not touch /api/ulpin/{ulpin}/overlap (the existing
-    3D volumetric overlap engine) or any geometry-matching/confidence-scoring
-    logic. If either ULPIN's geometry isn't cached as MATCHED yet, this
-    triggers the normal geometry.match_geometry() lookup (same as the
-    /geometry endpoint) rather than assuming it's missing.
-    """
     rec_a = _get_record(payload.parcel_a_ulpin)
     rec_b = _get_record(payload.parcel_b_ulpin)
     geo_a = geometry.match_geometry(rec_a["ulpin"], rec_a["latitude"], rec_a["longitude"], rec_a["area_m2"])
     geo_b = geometry.match_geometry(rec_b["ulpin"], rec_b["latitude"], rec_b["longitude"], rec_b["area_m2"])
-    return polygon_overlap.analyze_polygon_overlap_2d(
+    result = polygon_overlap.analyze_polygon_overlap_2d(
         payload.parcel_a_ulpin, payload.parcel_b_ulpin, geo_a, geo_b, rec_a, rec_b
     )
+    cache.cache_set(cache_key, result, ttl_seconds=86400)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+    logging.getLogger("ulpin.main").info("[PERF] 2D Overlap %s vs %s completed in %s ms", sorted_a, sorted_b, elapsed_ms)
+    return result
 
 
 @app.get("/")

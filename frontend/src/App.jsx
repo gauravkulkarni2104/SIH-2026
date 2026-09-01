@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { api, getSatelliteImageUrl } from './api';
 import PropertyPanel from './components/PropertyPanel';
 import MapView from './components/MapView';
@@ -109,63 +109,92 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── active request cancellation ref ──────────────────────────────────────
+  const activeControllerRef = useRef(null);
+
   // ─────────────────────────────────────────────────────────────────────────
-  // Select a ULPIN: fetch record → geometry → 3D → nearby in sequence
+  // Select a ULPIN: fire property, geometry, 3D, and nearby in parallel
   // ─────────────────────────────────────────────────────────────────────────
-  const handleSelectUlpin = useCallback(async (id) => {
+  const handleSelectUlpin = useCallback((id) => {
     if (!id) return;
+    if (activeControllerRef.current) {
+      activeControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
+    const signal = controller.signal;
+
     setSelectedId(id);
     setRecord(null); setRecordError(null); setRecordLoading(true);
-    setGeometry(null); setGeoError(null);
-    setThreeD(null); setThreeDError(null);
-    setNearby(null); setNearbyError(null);
+    setGeometry(null); setGeoError(null); setGeoLoading(true);
+    setThreeD(null); setThreeDError(null); setThreeDLoading(true);
+    setNearby(null); setNearbyError(null); setNearbyLoading(true);
     setVisibleFloorIndex(null);
     setSatelliteImgUrl(null);
 
-    // 1. Fetch property record
-    let rec;
-    try {
-      rec = await api.ulpin(id);
-      setRecord(rec);
-      setRecordLoading(false);
-    } catch (e) {
-      setRecordError(e.message || 'Failed to load property record');
-      setRecordLoading(false);
-      return;
-    }
-
-    // 2. Satellite image URL (backend streams the image — just set URL)
-    getSatelliteImageUrl(id).then(url => setSatelliteImgUrl(url));
-
-    // 3. Fetch geometry (can be slow — runs in parallel with nearby)
-    setGeoLoading(true);
-    api.geometry(id).then(geo => {
-      setGeometry(geo);
-      setGeoLoading(false);
-    }).catch(e => {
-      setGeoError(e.message || 'Geometry search failed');
-      setGeoLoading(false);
+    getSatelliteImageUrl(id).then(url => {
+      if (!signal.aborted) setSatelliteImgUrl(url);
     });
 
-    // 4. Fetch 3D model
-    setThreeDLoading(true);
-    api.threeD(id).then(td => {
-      setThreeD(td);
-      setThreeDLoading(false);
-    }).catch(e => {
-      setThreeDError(e.message || '3D model unavailable');
-      setThreeDLoading(false);
-    });
+    // 1. Property Record
+    api.ulpin(id, { signal })
+      .then(rec => {
+        if (!signal.aborted) {
+          setRecord(rec);
+          setRecordLoading(false);
+        }
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError' && !signal.aborted) {
+          setRecordError(e.message || 'Failed to load property record');
+          setRecordLoading(false);
+        }
+      });
 
-    // 5. Fetch nearby
-    setNearbyLoading(true);
-    api.nearby(id).then(nb => {
-      setNearby(nb);
-      setNearbyLoading(false);
-    }).catch(e => {
-      setNearbyError(e.message || 'Nearby search failed');
-      setNearbyLoading(false);
-    });
+    // 2. Geometry
+    api.geometry(id, false, { signal })
+      .then(geo => {
+        if (!signal.aborted) {
+          setGeometry(geo);
+          setGeoLoading(false);
+        }
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError' && !signal.aborted) {
+          setGeoError(e.message || 'Geometry search failed');
+          setGeoLoading(false);
+        }
+      });
+
+    // 3. 3D Model
+    api.threeD(id, { signal })
+      .then(td => {
+        if (!signal.aborted) {
+          setThreeD(td);
+          setThreeDLoading(false);
+        }
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError' && !signal.aborted) {
+          setThreeDError(e.message || '3D model unavailable');
+          setThreeDLoading(false);
+        }
+      });
+
+    // 4. Nearby ULPINs
+    api.nearby(id, { signal })
+      .then(nb => {
+        if (!signal.aborted) {
+          setNearby(nb);
+          setNearbyLoading(false);
+        }
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError' && !signal.aborted) {
+          setNearbyError(e.message || 'Nearby search failed');
+          setNearbyLoading(false);
+        }
+      });
   }, []);
 
   // Retry geometry with refresh=true
