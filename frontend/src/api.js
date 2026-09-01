@@ -1,14 +1,10 @@
-const isDev = import.meta.env.DEV;
+const envUrl = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '').trim();
+const DEFAULT_PROD_API = 'https://sih-2026-1-ae20.onrender.com';
+const DEFAULT_DEV_API = 'http://127.0.0.1:8000';
 
-let rawBase = import.meta.env.VITE_API_BASE_URL || (isDev ? 'http://127.0.0.1:8000' : '');
-
-if (!rawBase) {
-  throw new Error(
-    'VITE_API_BASE_URL is not configured. Add the public HTTPS backend URL in Vercel Environment Variables.'
-  );
-}
-
-const API_BASE_URL = rawBase.replace(/\/+$/, '');
+const BASE = envUrl
+  ? envUrl.replace(/\/+$/, '')
+  : (import.meta.env.DEV ? DEFAULT_DEV_API : DEFAULT_PROD_API);
 
 const _CLIENT_CACHE = new Map();
 
@@ -18,7 +14,7 @@ async function get(path, options = {}) {
     return _CLIENT_CACHE.get(path);
   }
 
-  const res = await fetch(API_BASE_URL + path, { signal });
+  const res = await fetch(BASE + path, { signal });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `Request failed: ${res.status}`);
@@ -35,7 +31,7 @@ async function post(path, body, options = {}) {
     return _CLIENT_CACHE.get(cacheKey);
   }
 
-  const res = await fetch(API_BASE_URL + path, {
+  const res = await fetch(BASE + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -64,7 +60,7 @@ export const api = {
   clearCache: () => _CLIENT_CACHE.clear(),
 };
 
-export const API_BASE = API_BASE_URL;
+export const API_BASE = BASE;
 
 export async function getSatelliteImageUrl(ulpin) {
   return `${API_BASE}/api/ulpin/${encodeURIComponent(ulpin)}/satellite/image`;
