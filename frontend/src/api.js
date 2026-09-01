@@ -1,10 +1,16 @@
-const envUrl = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '').trim();
-const DEFAULT_PROD_API = 'https://sih-2026-1-ae20.onrender.com';
-const DEFAULT_DEV_API = 'http://127.0.0.1:8000';
+const isDev = import.meta.env.DEV;
+const rawEnvUrl = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || '').trim();
 
-const BASE = envUrl
-  ? envUrl.replace(/\/+$/, '')
-  : (import.meta.env.DEV ? DEFAULT_DEV_API : DEFAULT_PROD_API);
+// Production default points directly to deployed Render backend.
+// In deployed production, localhost is never used as a fallback.
+const PROD_BACKEND_URL = 'https://sih-2026-1-ae20.onrender.com';
+const DEV_BACKEND_URL = 'http://localhost:8000';
+
+const API_BASE_URL = rawEnvUrl
+  ? rawEnvUrl.replace(/\/+$/, '')
+  : (isDev ? DEV_BACKEND_URL : PROD_BACKEND_URL);
+
+const BASE = API_BASE_URL;
 
 const _CLIENT_CACHE = new Map();
 
@@ -61,6 +67,7 @@ export const api = {
 };
 
 export const API_BASE = BASE;
+export { API_BASE_URL };
 
 export async function getSatelliteImageUrl(ulpin) {
   return `${API_BASE}/api/ulpin/${encodeURIComponent(ulpin)}/satellite/image`;
