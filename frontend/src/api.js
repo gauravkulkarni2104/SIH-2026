@@ -6,9 +6,7 @@ const rawEnvUrl = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API
 const PROD_BACKEND_URL = 'https://sih-2026-1-ae20.onrender.com';
 const DEV_BACKEND_URL = 'http://localhost:8000';
 
-const API_BASE_URL = rawEnvUrl
-  ? rawEnvUrl.replace(/\/+$/, '')
-  : (isDev ? DEV_BACKEND_URL : PROD_BACKEND_URL);
+const API_BASE_URL = 'https://sih-2026-1-ae20.onrender.com';
 
 const BASE = API_BASE_URL;
 
